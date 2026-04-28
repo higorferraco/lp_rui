@@ -53,21 +53,225 @@
 
   /* ── 3. Smooth Scroll for Anchor Links ──────────── */
   function initSmoothScroll() {
-    document.querySelectorAll('a[href^="#"]').forEach((anchor) => {
+    const anchors = document.querySelectorAll('a[href^="#"]');
+    const enhancedScroll = IS_DESKTOP && !IS_TOUCH && !REDUCED_MOTION;
+    const state = {
+      current: window.scrollY,
+      target: window.scrollY,
+      rafId: 0,
+      isAnimating: false
+    };
+
+    function getMaxScroll() {
+      return Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    }
+
+    function clampScroll(value) {
+      return Math.min(getMaxScroll(), Math.max(0, value));
+    }
+
+    function syncProgress(scrollY = window.scrollY) {
+      const maxScroll = getMaxScroll();
+      const progress = maxScroll > 0 ? scrollY / maxScroll : 0;
+      document.documentElement.style.setProperty('--scroll-progress', progress.toFixed(4));
+    }
+
+    function syncState(scrollY = window.scrollY) {
+      const nextScroll = clampScroll(scrollY);
+      state.current = nextScroll;
+      state.target = nextScroll;
+      syncProgress(nextScroll);
+    }
+
+    function stopAnimation() {
+      if (state.rafId) {
+        cancelAnimationFrame(state.rafId);
+        state.rafId = 0;
+      }
+      state.isAnimating = false;
+    }
+
+    function animateScroll() {
+      state.isAnimating = true;
+      state.current += (state.target - state.current) * 0.14;
+
+      if (Math.abs(state.target - state.current) < 0.5) {
+        state.current = state.target;
+      }
+
+      window.scrollTo(0, state.current);
+      syncProgress(state.current);
+
+      if (state.current !== state.target) {
+        state.rafId = requestAnimationFrame(animateScroll);
+        return;
+      }
+
+      stopAnimation();
+      syncState(state.target);
+    }
+
+    function requestTick() {
+      if (state.isAnimating) return;
+      state.rafId = requestAnimationFrame(animateScroll);
+    }
+
+    function scrollToPosition(nextTarget, immediate = false) {
+      state.target = clampScroll(nextTarget);
+
+      if (immediate) {
+        stopAnimation();
+        window.scrollTo(0, state.target);
+        syncState(state.target);
+        return;
+      }
+
+      requestTick();
+    }
+
+    function getAnchorTop(target) {
+      const navbarHeight = document.getElementById('navbar')?.offsetHeight || 0;
+      return clampScroll(
+        target.getBoundingClientRect().top + window.scrollY - navbarHeight - 20
+      );
+    }
+
+    function hasScrollableAncestor(node) {
+      let current = node instanceof Element ? node : null;
+
+      while (current && current !== document.body) {
+        const style = window.getComputedStyle(current);
+        const canScroll = /(auto|scroll|overlay)/.test(style.overflowY)
+          && current.scrollHeight > current.clientHeight + 1;
+
+        if (canScroll) return true;
+        current = current.parentElement;
+      }
+
+      return false;
+    }
+
+    function isTypingTarget() {
+      const activeElement = document.activeElement;
+      if (!activeElement) return false;
+      if (activeElement.isContentEditable) return true;
+      return ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeElement.tagName);
+    }
+
+    if (enhancedScroll) {
+      document.documentElement.classList.add('enhanced-scroll');
+
+      window.addEventListener('wheel', (e) => {
+        if (e.ctrlKey || e.deltaY === 0 || hasScrollableAncestor(e.target)) return;
+
+        e.preventDefault();
+        scrollToPosition(state.target + e.deltaY * 0.9);
+      }, { passive: false });
+
+      window.addEventListener('keydown', (e) => {
+        if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || isTypingTarget()) {
+          return;
+        }
+
+        let delta = 0;
+
+        switch (e.key) {
+          case 'ArrowDown':
+            delta = 110;
+            break;
+          case 'ArrowUp':
+            delta = -110;
+            break;
+          case 'PageDown':
+            delta = window.innerHeight * 0.82;
+            break;
+          case 'PageUp':
+            delta = -window.innerHeight * 0.82;
+            break;
+          case ' ':
+          case 'Spacebar':
+            delta = window.innerHeight * 0.82 * (e.shiftKey ? -1 : 1);
+            break;
+          case 'Home':
+            e.preventDefault();
+            scrollToPosition(0);
+            return;
+          case 'End':
+            e.preventDefault();
+            scrollToPosition(getMaxScroll());
+            return;
+          default:
+            return;
+        }
+
+        e.preventDefault();
+        scrollToPosition(state.target + delta);
+      });
+
+      window.addEventListener('scroll', () => {
+        if (!state.isAnimating) {
+          syncState(window.scrollY);
+        }
+      }, { passive: true });
+    } else {
+      window.addEventListener('scroll', () => {
+        syncProgress(window.scrollY);
+      }, { passive: true });
+    }
+
+    window.addEventListener('resize', () => {
+      if (enhancedScroll) {
+        state.target = clampScroll(state.target);
+        state.current = clampScroll(state.current);
+      }
+      syncProgress(window.scrollY);
+    }, { passive: true });
+
+    anchors.forEach((anchor) => {
       anchor.addEventListener('click', (e) => {
         const targetId = anchor.getAttribute('href');
         if (targetId === '#') return;
+
         const target = document.querySelector(targetId);
         if (!target) return;
 
         e.preventDefault();
-        const navbarHeight = document.getElementById('navbar')?.offsetHeight || 0;
+
+        const targetTop = getAnchorTop(target);
+        if (window.history.replaceState) {
+          try {
+            window.history.replaceState(null, '', targetId);
+          } catch {
+            // Ignore hash sync errors in restricted browsing contexts.
+          }
+        }
+
+        if (enhancedScroll) {
+          scrollToPosition(targetTop);
+          return;
+        }
+
         window.scrollTo({
-          top: target.getBoundingClientRect().top + window.scrollY - navbarHeight - 20,
-          behavior: 'smooth'
+          top: targetTop,
+          behavior: REDUCED_MOTION ? 'auto' : 'smooth'
         });
       });
     });
+
+    syncState(window.scrollY);
+
+    if (window.location.hash && window.location.hash !== '#') {
+      const initialTarget = document.querySelector(window.location.hash);
+      if (initialTarget) {
+        const targetTop = getAnchorTop(initialTarget);
+        if (enhancedScroll) {
+          scrollToPosition(targetTop, true);
+        } else {
+          window.scrollTo(0, targetTop);
+          syncProgress(targetTop);
+        }
+      }
+    }
   }
 
   /* ── 4. Parallax Hero Image ─────────────────────── */
