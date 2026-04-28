@@ -1,0 +1,8 @@
+.agents/
+.claude/
+backup/
+baixar/
+baixar.zip
+*.bak
+*.pen
+skills-lock.json
